@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Chat App — Test Frontend</title>
+<style>
+  body { font-family: monospace; max-width: 900px; margin: 20px auto; background: #111; color: #eee; }
+  section { border: 1px solid #444; padding: 12px; margin-bottom: 16px; border-radius: 6px; }
+  h2 { margin-top: 0; font-size: 15px; color: #7fd; }
+  input { padding: 6px; margin: 4px 4px 4px 0; background: #222; color: #eee; border: 1px solid #555; }
+  button { padding: 6px 12px; margin: 4px; cursor: pointer; background: #2a2; color: #fff; border: none; border-radius: 4px; }
+  button:hover { background: #3c3; }
+  #log { height: 250px; overflow-y: auto; background: #000; padding: 8px; font-size: 12px; white-space: pre-wrap; }
+  .status { font-weight: bold; }
+  .ok { color: #4f4; }
+  .err { color: #f44; }
+  #searchResults div { padding: 4px; border-bottom: 1px solid #333; }
+  #searchResults button { padding: 2px 8px; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<h1>Chat App — Test Frontend</h1>
+<p>Backend base URL: <input id="baseUrl" value="http://localhost:3000" size="30" /></p>
+
+<section>
+  <h2>1. Register</h2>
+  <input id="regUsername" placeholder="username" />
+  <input id="regEmail" placeholder="email" />
+  <input id="regPassword" placeholder="password" type="password" />
+  <button onclick="register()">Register</button>
+</section>
+
+<section>
+  <h2>2. Login</h2>
+  <input id="loginEmail" placeholder="email" />
+  <input id="loginPassword" placeholder="password" type="password" />
+  <button onclick="login()">Login</button>
+  <p>Access Token: <span id="tokenDisplay" style="word-break:break-all;color:#aaf;"></span></p>
+  <p>My User ID: <span id="myUserId" style="color:#aaf;"></span></p>
+</section>
+
+<section>
+  <h2>3. Search Users</h2>
+  <input id="searchQuery" placeholder="username to search" />
+  <button onclick="searchUsers()">Search</button>
+  <div id="searchResults"></div>
+</section>
+
+<section>
+  <h2>4. WebSocket Connection</h2>
+  <button onclick="connectWS()">Connect</button>
+  <button onclick="disconnectWS()">Disconnect</button>
+  <p>Status: <span id="wsStatus" class="status err">disconnected</span></p>
+</section>
+
+<section>
+  <h2>5. Send Message</h2>
+  <input id="recipientId" placeholder="recipient user _id" size="30" />
+  <input id="messageText" placeholder="message text" size="30" />
+  <button onclick="sendMessage()">Send</button>
+</section>
+
+<section>
+  <h2>Event Log</h2>
+  <div id="log"></div>
+</section>
+
+<script>
+  let token = null;
+  let myUserId = null;
+  let ws = null;
+
+  function base() {
+    return document.getElementById("baseUrl").value.replace(/\/$/, "");
+  }
+
+  function log(msg, cls) {
+    const el = document.getElementById("log");
+    const line = document.createElement("div");
+    if (cls) line.className = cls;
+    line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  async function register() {
+    const username = document.getElementById("regUsername").value;
+    const email = document.getElementById("regEmail").value;
+    const password = document.getElementById("regPassword").value;
+    try {
+      const res = await fetch(`${base()}/api/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, email, password }),
+      });
+      const data = await res.json();
+      log("register: " + JSON.stringify(data), res.ok ? "ok" : "err");
+    } catch (e) {
+      log("register error: " + e.message, "err");
+    }
+  }
+
+  async function login() {
+    const email = document.getElementById("loginEmail").value;
+    const password = document.getElementById("loginPassword").value;
+    try {
+      const res = await fetch(`${base()}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      log("login: " + JSON.stringify(data), res.ok ? "ok" : "err");
+      if (res.ok) {
+        token = data.data.accessToken;
+        myUserId = data.data.user.id;
+        document.getElementById("tokenDisplay").textContent = token;
+        document.getElementById("myUserId").textContent = myUserId;
+      }
+    } catch (e) {
+      log("login error: " + e.message, "err");
+    }
+  }
+
+  async function searchUsers() {
+    if (!token) { log("login first", "err"); return; }
+    const q = document.getElementById("searchQuery").value;
+    try {
+      const res = await fetch(`${base()}/api/users/search?q=${encodeURIComponent(q)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      log("search: " + JSON.stringify(data), res.ok ? "ok" : "err");
+      const container = document.getElementById("searchResults");
+      container.innerHTML = "";
+      (data.data || []).forEach((u) => {
+        const div = document.createElement("div");
+        div.textContent = `${u.username} (${u.is_online ? "online" : "offline"}) — ${u._id} `;
+        const btn = document.createElement("button");
+        btn.textContent = "Use as recipient";
+        btn.onclick = () => (document.getElementById("recipientId").value = u._id);
+        div.appendChild(btn);
+        container.appendChild(div);
+      });
+    } catch (e) {
+      log("search error: " + e.message, "err");
+    }
+  }
+
+  function connectWS() {
+    if (!token) { log("login first", "err"); return; }
+    const wsUrl = base().replace(/^http/, "ws");
+    ws = new WebSocket(`${wsUrl}?token=${token}`);
+
+    ws.onopen = () => {
+      document.getElementById("wsStatus").textContent = "connected";
+      document.getElementById("wsStatus").className = "status ok";
+      log("WebSocket connected", "ok");
+    };
+    ws.onclose = (e) => {
+      document.getElementById("wsStatus").textContent = `disconnected (${e.code})`;
+      document.getElementById("wsStatus").className = "status err";
+      log(`WebSocket closed: ${e.code} ${e.reason}`, "err");
+    };
+    ws.onerror = () => log("WebSocket error", "err");
+    ws.onmessage = (event) => log("WS received: " + event.data);
+  }
+
+  function disconnectWS() {
+    if (ws) ws.close();
+  }
+
+  function sendMessage() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) { log("connect WebSocket first", "err"); return; }
+    const recipientId = document.getElementById("recipientId").value;
+    const text = document.getElementById("messageText").value;
+    const payload = { event: "message:send", payload: { recipientId, text } };
+    ws.send(JSON.stringify(payload));
+    log("WS sent: " + JSON.stringify(payload));
+  }
+</script>
+
+</body>
+</html>
